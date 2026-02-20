@@ -26,7 +26,7 @@ The goal is to understand how shrinkage methods compare to naive subsampling in 
 
 ---
 
-## 📊 Key Contributions
+## Key Contributions
 
 - High-dimensional synthetic data simulation  
 - Empirical Bias² + Variance + Noise decomposition  
@@ -37,7 +37,7 @@ The goal is to understand how shrinkage methods compare to naive subsampling in 
 
 ---
 
-## 📂 Repository Structure
+## Repository Structure
 
 ```
 pranavssss/
