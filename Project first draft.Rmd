@@ -1,0 +1,704 @@
+---
+title: "Final Project Report: Subsampling vs Ridge Regularization vs Lasso Regularization vs Elastic Net"
+author: |
+  Pranav Senthilkumaran  
+  Master's in Data Science Student  
+  Rutgers University  
+  \href{https://github.com/pranavssss/Subsampling-vs-Ridge-Regularization-vs-Lasso-Regularization-vs-Elastic-Net_}{GitHub Project Repository}
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+    number_sections: true
+header-includes:
+  - \usepackage{hyperref}
+  - \hypersetup{colorlinks=true, urlcolor=blue}
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(ggplot2)
+library(dplyr)
+library(glmnet)
+library(gridExtra)
+library(GGally)
+library(caret)
+library(corrplot)
+library(zoo)
+```
+
+# Introduction
+
+This report analyzes the equivalence between subsampling, ridge regularization, lasso regularization, and Elastic Net regularization from both a theoretical and empirical perspective using controlled synthetic data.
+
+# Step 1: Data Simulation
+
+**Objective**: Simulate high-dimensional data with 200 rows and 100 features using random normal distribution.
+
+**Purpose**: Provide a controlled environment to evaluate and compare Elastic Net, Ridge, Subsampling, and Lasso models.
+
+Simulate:
+
+- \( n = 200 \) observations  
+
+- \( p = 100 \) predictors  
+
+**Target Variable**: \( y = X\beta + \varepsilon \) — standard linear model with noise.
+
+```{r}
+set.seed(42)
+n <- 200
+p <- 100
+X <- matrix(rnorm(n * p), nrow = n)
+beta <- rnorm(p)
+y <- X %*% beta + rnorm(n)
+df <- data.frame(y, X)
+```
+
+# Step 2: Exploratory Data Analysis (EDA)
+
+## 1. Distribution and Outliers
+
+**Histogram**: Visualizes the distribution of y.
+Appears symmetric with some extreme values.
+
+**Boxplot**: Highlights outliers, confirms a few extreme observations in y.
+
+```{r}
+hist(df$y, breaks = 30, main = "Distribution of Target Variable y", xlab = "y")
+boxplot(df$y, horizontal = TRUE, main = "Boxplot of y")
+```
+
+## 2. Correlation
+
+**GGally:**:ggpairs: Examines correlations between y and the first 9 features.
+
+
+**Takeaway:** Weak linear relationships between most variables — reflects high-dimensional randomness.
+
+```{r}
+subset_df <- df[, 1:10]
+ggpairs(subset_df)
+```
+
+## 3. Time Trends
+
+**Moving Average Plot:** Demonstrates how y behaves over a pseudo-time axis.
+
+
+**Purpose:** Helps visualize local trends and fluctuations.
+
+```{r}
+df$time <- 1:nrow(df)
+df$moving_avg <- zoo::rollmean(df$y, 10, fill = NA)
+ggplot(df, aes(x = time, y = y)) +
+  geom_line(alpha = 0.4) +
+  geom_line(aes(y = moving_avg), color = 'blue', size = 1) +
+  labs(title = "Time Trend with Moving Average", x = "Time", y = "y")
+```
+
+**Takeaway**: Some short-term fluctuation is observed, but no consistent trend emerges.
+
+## 4. Sector-Level Insights
+
+**Boxplot by Sector:** y is visualized across 4 randomly assigned sectors.
+
+
+**Takeaway:** Adds a categorical dimension for interpreting distribution spread.
+
+```{r}
+set.seed(123)
+df$sector <- sample(c("Tech", "Health", "Finance", "Energy"), nrow(df), replace = TRUE)
+ggplot(df, aes(x = sector, y = y)) +
+  geom_boxplot(fill = "skyblue") +
+  labs(title = "Sector-wise Distribution of Target Variable", x = "Sector", y = "y")
+```
+
+## 5. Volatility & Volume
+
+**Scatter Plot:\* Shows how volatility (high-low spread) varies with transaction volume.** Simulated Financial Analogy:\*\* Useful if modeling stock-like behavior.
+
+```{r}
+df$high <- df$y + runif(nrow(df), 0, 5)
+df$low <- df$y - runif(nrow(df), 0, 5)
+df$volume <- rpois(nrow(df), lambda = 1000)
+df$volatility <- df$high - df$low
+
+ggplot(df, aes(x = volume, y = volatility)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Volume vs Volatility", x = "Volume", y = "Volatility")
+```
+
+# Step 3: Model Training and Evaluation (Train–Test Split)
+
+```{r}
+# Shared Train-Test Split
+set.seed(123)
+train_idx <- sample(1:n, size = 0.7 * n)
+X_train <- X[train_idx, ]
+y_train <- y[train_idx]
+X_test <- X[-train_idx, ]
+y_test <- y[-train_idx]
+```
+
+## 6. Methodologies and Trends
+
+## Ridge Regression
+
+Uses glmnet with alpha = 0.
+Applies regularization to shrink coefficients and reduce overfitting.
+MSE is computed to evaluate prediction accuracy.
+Ridge regression was fit using glmnet with alpha = 0.
+Cross-validation selected the optimal lambda.
+The model reduces overfitting by shrinking coefficients.
+MSE was calculated on test data for performance comparison.
+
+```{r}
+cv_ridge <- cv.glmnet(X_train, y_train, alpha = 0)
+ridge_model <- glmnet(X_train, y_train, alpha = 0, lambda = cv_ridge$lambda.min)
+ridge_pred <- predict(ridge_model, s = cv_ridge$lambda.min, newx = X_test)
+ridge_mse <- mean((ridge_pred - y_test)^2)
+ridge_mse
+```
+
+## Lasso Regression
+
+Uses glmnet with alpha = 1.
+Performs feature selection by setting some coefficients to zero.
+MSE is computed to compare with Ridge and Subsampling.
+Lasso was fit using glmnet with cross-validated lambda.
+It shrinks some coefficients to zero, enabling feature selection.
+Test set predictions were used to compute MSE for comparison.
+
+```{r}
+cv_lasso <- cv.glmnet(X_train, y_train, alpha = 1)
+lasso_model <- glmnet(X_train, y_train, alpha = 1, lambda = cv_lasso$lambda.min)
+lasso_pred <- predict(lasso_model, s = cv_lasso$lambda.min, newx = X_test)
+lasso_mse <- mean((lasso_pred - y_test)^2)
+lasso_mse
+```
+## Elastic Net Regression 
+
+Uses glmnet with alpha = 0.5, combining L1 and L2 penalties.
+Elastic Net balances sparsity (Lasso) and stability (Ridge) - convex combition of L1 and L2.
+Particularly effective when predictors are correlated.
+Cross-validation selects the optimal lambda for the mixed penalty.
+MSE is computed to evaluate predictive performance.
+
+```{r}
+cv_enet <- cv.glmnet(X_train, y_train, alpha = 0.5)
+enet_model <- glmnet(X_train, y_train, alpha = 0.5, lambda = cv_enet$lambda.min)
+enet_pred <- predict(enet_model, s = cv_enet$lambda.min, newx = X_test)
+enet_mse <- mean((enet_pred - y_test)^2)
+enet_mse
+```
+
+## Subsampling Ensemble 
+
+Creates 30 models using 50% random subsamples.
+Aggregates predictions by averaging.
+MSE is computed and found to be high, showing instability under random sampling.
+An ensemble of 30 linear models was built using 50% random subsamples of training data.
+Predictions were averaged across models to form a final prediction.
+The MSE was computed, revealing higher error due to variability from random sampling.
+
+```{r subsampling}
+p <- ncol(X_train)
+X_train_df <- as.data.frame(X_train)
+X_test_df <- as.data.frame(X_test)
+colnames(X_train_df) <- paste0("X", 1:p)
+colnames(X_test_df) <- paste0("X", 1:p)
+
+set.seed(123)
+ensemble_preds <- replicate(30, {
+  sample_idx <- sample(1:nrow(X_train_df), size = floor(0.5 * nrow(X_train_df)))
+  lm_data <- data.frame(y = y_train[sample_idx], X_train_df[sample_idx, ])
+  model <- lm(y ~ ., data = lm_data)
+  predict(model, newdata = X_test_df)
+})
+
+ensemble_mean <- rowMeans(ensemble_preds, na.rm = TRUE)
+subsample_mse <- mean((ensemble_mean - y_test)^2)
+subsample_mse
+```
+
+# *Step 4: Model Comparison*
+
+## MSE Comparison including Elastic Net, Ridge, Subsampling, and Lasso
+
+The bar plot compares the mean squared errors (MSE) of Elastic Net, Ridge, Subsampling, and Lasso models.
+Each bar shows the test error from the respective method, highlighting relative prediction accuracy.
+Regularized models outperform subsampling-based ensembling, show lower MSE than Subsampling, suggesting better generalization.
+Elastic Net achieves a balance between Ridge stability and Lasso sparsity.
+
+```{r mse_plot, echo=FALSE}
+mse_df <- data.frame(
+  Method = c("Ridge", "Lasso", "Elastic Net", "Subsampling"),
+  MSE = c(ridge_mse, lasso_mse, enet_mse, subsample_mse)
+)
+
+ggplot(mse_df, aes(x = Method, y = MSE, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = round(MSE, 2)), vjust = -0.5, size = 5) +
+  labs(title = "MSE Comparison Across Methods",
+       x = "Method", y = "Mean Squared Error") +
+  theme_minimal()
+```
+
+```         
+```
+
+# *Step 5: Additional Simulations and Diagnostics* 
+
+## 7. Recovery Time vs Decline Shows linear correlation between simulated crash decline and recovery time.
+
+```{r}
+df$crash <- sample(c(TRUE, FALSE), nrow(df), replace = TRUE)
+df$decline <- ifelse(df$crash, abs(rnorm(nrow(df), 10, 5)), NA)
+df$recovery_time <- ifelse(df$crash, rnorm(nrow(df), 50, 20), NA)
+
+ggplot(na.omit(df), aes(x = decline, y = recovery_time)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = "Recovery Time vs Decline Magnitude", x = "Decline", y = "Recovery Time")
+```
+
+## 8. Confusion Matrix
+
+Binary classification of response into High vs Low.
+Classifies y into High vs Low using top features.
+Accuracy: \~50%, which is close to random — typical in high-dimensional data with weak signal.
+**Note**: Only the first 10 features were used to simplify the classification task and reduce overfitting risk.
+
+```{r}
+df$label <- ifelse(df$y > median(df$y), "High", "Low")
+df$label <- as.factor(df$label)
+feature_cols <- paste0("X", 1:10)
+train_data <- df[train_idx, ]
+test_data <- df[-train_idx, ]
+
+model_log <- glm(label ~ ., data = train_data[, c("label", feature_cols)], family = "binomial")
+pred_probs <- predict(model_log, newdata = test_data[, feature_cols], type = "response")
+pred_class <- ifelse(pred_probs > 0.5, "High", "Low")
+pred_class <- factor(pred_class, levels = c("Low", "High"))
+
+confusionMatrix(pred_class, test_data$label)
+```
+
+## 9. Bias-Variance Decomposition (Theoretical + Empirical)
+
+# This section performs a simulation study to compare Ridge, Lasso, Elastic Net, and Subsampling.
+1. Computes test MSE distributions across 100 simulations and visualize with a boxplot.
+2. Performs an empirical Bias²-Variance decomposition using a fixed test set.
+3. Visualizes Bias², Variance, and Noise contributions with a stacked barplot.
+
+Theoretical prediction error decomposes into three components:
+**Bias², Variance, and Irreducible Noise**.
+$$
+\mathbb{E}\big[(Y - \hat{f}(X))^2\big] = \text{Bias}^2 + \text{Variance} + \sigma^2
+$$
+
+
+Bias reflects systematic error due to model assumptions, while variance captures sensitivity to sampling variability.
+
+Regularization methods intentionally introduce bias to reduce variance, improving generalization in high-dimensional settings.
+
+```{r bias-variance}
+simulate_model <- function(n, p, nsim = 100) {
+
+  mse_ridge <- mse_lasso <- mse_enet <- mse_sub <- numeric(nsim)
+
+  for (i in 1:nsim) {
+
+    X <- matrix(rnorm(n * p), n)
+    beta <- rnorm(p)
+    y <- X %*% beta + rnorm(n)
+
+    idx <- sample(1:n, 0.7 * n)
+    Xtr <- X[idx, ]; ytr <- y[idx]
+    Xte <- X[-idx, ]; yte <- y[-idx]
+
+    # Ridge
+    ridge_fit <- cv.glmnet(Xtr, ytr, alpha = 0)
+    mse_ridge[i] <- mean((predict(ridge_fit, s="lambda.min", Xte) - yte)^2)
+
+    # Lasso
+    lasso_fit <- cv.glmnet(Xtr, ytr, alpha = 1)
+    mse_lasso[i] <- mean((predict(lasso_fit, s="lambda.min", Xte) - yte)^2)
+
+    # Elastic Net
+    enet_fit <- cv.glmnet(Xtr, ytr, alpha = 0.5)
+    mse_enet[i] <- mean((predict(enet_fit, s="lambda.min", Xte) - yte)^2)
+
+    # Subsampling
+    preds <- replicate(30, {
+      id <- sample(1:nrow(Xtr), floor(0.5 * nrow(Xtr)))
+      predict(lm(ytr[id] ~ ., data = as.data.frame(Xtr[id, ])),
+              as.data.frame(Xte))
+    })
+
+    mse_sub[i] <- mean((rowMeans(preds) - yte)^2)
+  }
+
+  data.frame(Ridge = mse_ridge,
+             Lasso = mse_lasso,
+             ElasticNet = mse_enet,
+             Subsampling = mse_sub)
+}
+
+results <- simulate_model(200, 100)
+
+boxplot(results,
+        main = "Empirical Bias-Variance Decomposition",
+        ylab = "Test MSE")
+
+
+# ----------------------------
+# Empirical Bias-Variance Decomposition
+# ----------------------------
+set.seed(123)
+n <- 200
+p <- 100
+nsim <- 100
+sigma2 <- 1  # known noise variance
+
+# Fixed test set
+X_test <- matrix(rnorm(n * p), n)
+beta_true <- rnorm(p)
+f_true <- X_test %*% beta_true  # true signal without noise
+
+# Storage for predictions
+pred_ridge <- pred_lasso <- pred_enet <- pred_sub <- matrix(NA, nsim, n)
+
+for (i in 1:nsim) {
+  # Generate training data
+  X_train <- matrix(rnorm(n * p), n)
+  y_train <- X_train %*% beta_true + rnorm(n, sd = sqrt(sigma2))
+  
+  # Ridge
+  ridge_fit <- cv.glmnet(X_train, y_train, alpha = 0)
+  pred_ridge[i, ] <- predict(ridge_fit, s = "lambda.min", X_test)
+  
+  # Lasso
+  lasso_fit <- cv.glmnet(X_train, y_train, alpha = 1)
+  pred_lasso[i, ] <- predict(lasso_fit, s = "lambda.min", X_test)
+  
+  # Elastic Net
+  enet_fit <- cv.glmnet(X_train, y_train, alpha = 0.5)
+  pred_enet[i, ] <- predict(enet_fit, s = "lambda.min", X_test)
+  
+  # Subsampling 
+  preds_sub <- replicate(30, {
+    idx <- sample(1:nrow(X_train), floor(0.5 * nrow(X_train)))
+    lm_fit <- lm(y_train[idx] ~ ., data = as.data.frame(X_train[idx, ]))
+    predict(lm_fit, as.data.frame(X_test))
+  })
+  pred_sub[i, ] <- rowMeans(preds_sub)
+}
+
+# Function to compute Bias² and Variance
+compute_bias_variance <- function(pred_matrix, f_true, sigma2) {
+  mean_pred <- colMeans(pred_matrix)
+  bias2 <- mean((mean_pred - f_true)^2)
+  variance <- mean(apply(pred_matrix, 2, var))
+  c(Bias2 = bias2, Variance = variance, Noise = sigma2)
+}
+
+# Compute Bias², Variance, Noise for all methods
+bv_results <- rbind(
+  Ridge = compute_bias_variance(pred_ridge, f_true, sigma2),
+  Lasso = compute_bias_variance(pred_lasso, f_true, sigma2),
+  ElasticNet = compute_bias_variance(pred_enet, f_true, sigma2),
+  Subsampling = compute_bias_variance(pred_sub, f_true, sigma2)
+)
+
+bv_df <- as.data.frame(bv_results)
+bv_df  # display numeric values
+
+# ----------------------------
+# Stacked Barplot for Bias-Variance Decomposition
+# ----------------------------
+# Remove Subsampling for stacked bar plot
+bv_plot_df <- bv_df[rownames(bv_df) != "Subsampling", ]
+
+# Add Method column
+bv_plot_df$Method <- rownames(bv_plot_df)
+
+# Pivot to long format
+bv_long <- tidyr::pivot_longer(
+  bv_plot_df,
+  cols = c("Bias2", "Variance", "Noise"),
+  names_to = "Component",
+  values_to = "Value"
+)
+
+# Plot
+ggplot(bv_long, aes(x = Method, y = Value, fill = Component)) +
+  geom_bar(stat = "identity", position = "stack") +
+  labs(title = "Empirical Bias–Variance Decomposition (Excluding Subsampling)",
+       x = "Method",
+       y = "Error Contribution") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2")
+
+```
+
+# Key Takeaway:
+Demonstrated the theoretical Bias^2 + Variance + Noise decomposition by generating multiple training datasets, fitting each model, and empirically estimating Bias^2 (average prediction vs true signal) and Variance (prediction variability). Noise was taken from the data.
+
+
+## 10. Subsampling Sensitivity Analysis
+
+X-axis = Sample ratio, Y-axis = MSE Subsampling ratios from 0.3 to 0.9 were tested.
+For each ratio, 30 linear models were trained on random subsamples, predictions were averaged, and MSE was computed.
+Conclusion: Higher subsample ratio slightly reduces MSE but still much worse than Ridge/Lasso.
+
+```{r subsampling-sensitivity}
+sensitivity_results <- sapply(seq(0.3, 0.9, by = 0.1), function(ratio) {
+  preds <- replicate(30, {
+    idx <- sample(1:nrow(X_train_df), floor(ratio * nrow(X_train_df)))
+    lm_data <- data.frame(y = y_train[idx], X_train_df[idx, ])
+    model <- lm(y ~ ., data = lm_data)
+    predict(model, newdata = X_test_df)
+  })
+  mean((rowMeans(preds, na.rm = TRUE) - y_test)^2)
+})
+
+plot(seq(0.3, 0.9, by = 0.1), sensitivity_results, type = "b",
+     xlab = "Subsampling Ratio", ylab = "MSE", main = "Subsampling Sensitivity Analysis")
+```
+
+# *Step 6: Dimensionality Reduction*
+
+## 11. PCA Analysis
+
+PCA Summary Table Shows variance explained by 100 principal components.
+Top PCs capture very little variance individually — confirms data is noisy.
+PC1 vs PC2 Scatterplot — spread confirms data has no strong clusters or separation.
+
+```{r pca-analysis}
+pca_result <- prcomp(X, scale. = TRUE)
+summary(pca_result)
+
+ggplot(data = data.frame(PC1 = pca_result$x[, 1], PC2 = pca_result$x[, 2]),
+       aes(x = PC1, y = PC2)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "PCA - First Two Principal Components", x = "PC1", y = "PC2")
+```
+
+# *Step 7: Additional Diagnostics*
+
+## 12. Correlation Heatmap
+
+Top 20 features — colored matrix helps spot variable interdependence.
+
+```{r correlation-heatmap}
+cor_matrix <- cor(df[, paste0("X", 1:20)])
+corrplot(cor_matrix, method = "color", tl.cex = 0.6)
+```
+
+## 13. Residual Analysis
+
+Visual Check: No major pattern — residuals centered around 0.
+
+```{r residual-analysis}
+# Convert training and test data to data frames
+X_train_df <- as.data.frame(X_train)
+X_test_df  <- as.data.frame(X_test)
+
+colnames(X_train_df) <- paste0("X", 1:ncol(X_train))
+colnames(X_test_df)  <- paste0("X", 1:ncol(X_test))
+
+# Ridge Regression Residuals
+cv_ridge <- cv.glmnet(X_train, y_train, alpha = 0)
+ridge_pred <- predict(cv_ridge, s = "lambda.min", newx = X_test)
+residuals_ridge <- y_test - ridge_pred
+
+# Lasso Regression Residuals
+cv_lasso <- cv.glmnet(X_train, y_train, alpha = 1)
+lasso_pred <- predict(cv_lasso, s = "lambda.min", newx = X_test)
+residuals_lasso <- y_test - lasso_pred
+
+# Elastic Net Regression Residuals
+cv_enet <- cv.glmnet(X_train, y_train, alpha = 0.5)
+enet_pred <- predict(cv_enet, s = "lambda.min", newx = X_test)
+residuals_enet <- y_test - enet_pred
+
+# Subsampling Ensemble Residuals
+ensemble_preds <- replicate(30, {
+  idx <- sample(1:nrow(X_train_df), size = floor(0.5 * nrow(X_train_df)))
+  lm_data <- data.frame(y = y_train[idx], X_train_df[idx, ])
+  model <- lm(y ~ ., data = lm_data)
+  predict(model, newdata = X_test_df)
+})
+
+ensemble_mean <- rowMeans(ensemble_preds, na.rm = TRUE)
+residuals_sub <- y_test - ensemble_mean
+
+# Plot residuals side by side
+par(mfrow = c(1, 4))
+
+plot(residuals_ridge,
+     main = "Ridge Residuals",
+     ylab = "Residual",
+     xlab = "Index",
+     col = "red")
+abline(h = 0, col = "black")
+
+plot(residuals_lasso,
+     main = "Lasso Residuals",
+     ylab = "Residual",
+     xlab = "Index",
+     col = "blue")
+abline(h = 0, col = "black")
+
+plot(residuals_enet,
+     main = "Elastic Net Residuals",
+     ylab = "Residual",
+     xlab = "Index",
+     col = "purple")
+abline(h = 0, col = "black")
+
+plot(na.omit(residuals_sub),
+     main = "Subsampling Residuals",
+     ylab = "Residual",
+     xlab = "Index",
+     col = "darkgreen")
+abline(h = 0, col = "black")
+
+par(mfrow = c(1, 1))
+```
+
+## 14. Model Complexity vs Error
+
+Ridge and Lasso models were trained across a grid of lambda values.
+For each lambda, MSE was calculated on test data.
+Plots were created to visualize how regularization strength affects model error.
+Subsampling was excluded as it lacks a regularization parameter.
+
+```{r model-complexity}
+lambdas <- 10^seq(3, -2, length.out = 100)
+
+# Ridge Model Complexity vs Error
+ridge_models <- glmnet(X_train, y_train, alpha = 0, lambda = lambdas)
+ridge_errors <- sapply(lambdas, function(l) {
+  preds <- predict(ridge_models, s = l, newx = X_test)
+  mean((preds - y_test)^2)
+})
+
+plot(log10(lambdas), ridge_errors, type = "l",
+     main = "Ridge: Model Complexity vs Error",
+     xlab = "log10(Lambda)",
+     ylab = "MSE",
+     col = "red")
+
+# Lasso Model Complexity vs Error
+lasso_models <- glmnet(X_train, y_train, alpha = 1, lambda = lambdas)
+lasso_errors <- sapply(lambdas, function(l) {
+  preds <- predict(lasso_models, s = l, newx = X_test)
+  mean((preds - y_test)^2)
+})
+
+plot(log10(lambdas), lasso_errors, type = "l",
+     main = "Lasso: Model Complexity vs Error",
+     xlab = "log10(Lambda)",
+     ylab = "MSE",
+     col = "blue")
+
+# Elastic Net Model Complexity vs Error
+enet_models <- glmnet(X_train, y_train, alpha = 0.5, lambda = lambdas)
+enet_errors <- sapply(lambdas, function(l) {
+  preds <- predict(enet_models, s = l, newx = X_test)
+  mean((preds - y_test)^2)
+})
+
+plot(log10(lambdas), enet_errors, type = "l",
+     main = "Elastic Net: Model Complexity vs Error",
+     xlab = "log10(Lambda)",
+     ylab = "MSE",
+     col = "purple")
+
+```
+
+## 15. Real Dataset Integration (Placeholder)
+
+Not yet implimented, Replace with real-world dataset to validate model generalization.
+
+```{r real-dataset}
+# Placeholder for real dataset usage
+# data_real <- read.csv("your_dataset.csv")
+# summary(data_real)
+```
+
+# *Step 8: Enhanced Styling Plot*
+
+## 16. Enhanced Styling Example
+
+```{r styled-plot, echo=FALSE, fig.width=6, fig.height=4}
+ggplot(df, aes(x = volume, y = volatility, color = sector)) +
+  geom_point(alpha = 0.6, size = 2) +
+  theme_minimal() +
+  labs(title = "Styled Plot: Volatility by Volume & Sector",
+       x = "Volume", y = "Volatility")
+```
+
+## 17. Conclusion
+
+```{r}
+# Load library
+library(dplyr)
+
+# Create comparison table
+model_comparison <- tibble::tibble(
+  Model = c("Ridge", "Lasso", "Elastic Net", "Subsampling"),
+  Test_MSE = c(round(ridge_mse, 2),
+               round(lasso_mse, 2),
+               round(enet_mse, 2),
+               round(subsample_mse, 2)),
+  Bias2 = round(bv_df$Bias2, 3),
+  Variance = round(bv_df$Variance, 3),
+  Noise = round(bv_df$Noise, 3),
+  Comments = c(
+    "Stable performance, moderate bias, low variance",
+    "Sparse solution, low bias, slightly higher variance",
+    "Balanced sparsity and stability, low bias and variance",
+    "Highly variable, large bias and variance due to small subsamples"
+  )
+)
+
+# Display table
+model_comparison
+```
+# Results and Interpretation
+
+This report evaluated Elastic Net, Ridge, Lasso, and Subsampling models through controlled simulations.
+
+- Ridge regression shows stable performance with moderate bias and relatively low variance. 
+
+- Lasso regression favors sparsity, yielding very low bias but slightly higher variance. 
+
+- Elastic Net balances Ridge stability and Lasso sparsity, achieving low bias and variance simultaneously.
+
+- Subsampling exhibits extreme variability with very high bias and variance, confirming that simple subsampling ensembles may be unreliable for high-dimensional linear models without regularization which seems to be a known fact.
+
+## Overall Conclusion
+
+The results illustrate that:
+
+- Ridge provides strong stability.
+- Lasso provides sparsity with moderate variance.
+- Elastic Net achieves the most balanced bias–variance tradeoff.
+
+
+# Future extensions
+
+- Real-world datasets to validate external generalization,
+- Sparse true coefficient structures,
+- Correlated predictor designs.
+
+
+
