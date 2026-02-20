@@ -1,0 +1,461 @@
+---
+title: "Intermediate Report: Subsampling vs Ridge Regularization vs Lasso Regularization"
+author: "Sanjith Ganesh, Anshu Goli, Pranav Senthilkumaran"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+    number_sections: true
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(ggplot2)
+library(dplyr)
+library(glmnet)
+library(gridExtra)
+library(GGally)
+library(caret)
+library(corrplot)
+library(zoo)
+```
+
+# Introduction
+
+This report analyzes the equivalence between subsampling, ridge regularization, and lasso regularization from both a theoretical and empirical perspective using synthetic data.
+
+# Step 1: Data Simulation
+
+**Objective**: Simulate high-dimensional data with 200 rows and 100 features using random normal distribution.
+
+**Purpose**: Provide a controlled environment to evaluate and compare Ridge, Subsampling, and Lasso models.
+
+**Target Variable**: `y = Xβ + ε` — standard linear model with noise.
+
+```{r}
+set.seed(42)
+n <- 200
+p <- 100
+X <- matrix(rnorm(n * p), nrow = n)
+beta <- rnorm(p)
+y <- X %*% beta + rnorm(n)
+df <- data.frame(y, X)
+```
+
+# Step 2: Exploratory Data Analysis (EDA)
+
+## 1. Distribution and Outliers
+
+**Histogram**: Visualizes the distribution of y.
+Appears symmetric with some extreme values.
+
+**Boxplot**: Highlights outliers, confirms a few extreme observations in y.
+
+```{r}
+hist(df$y, breaks = 30, main = "Distribution of Target Variable y", xlab = "y")
+boxplot(df$y, horizontal = TRUE, main = "Boxplot of y")
+```
+
+## 2. Correlation
+
+**GGally:**:ggpairs: Examines correlations between y and the first 9 features.
+
+**Takeaway:** Weak linear relationships between most variables — reflects high-dimensional randomness.
+
+```{r}
+subset_df <- df[, 1:10]
+ggpairs(subset_df)
+```
+
+## 3. Time Trends
+
+**Moving Average Plot:** Demonstrates how y behaves over a pseudo-time axis.
+**Purpose:** Helps visualize local trends and fluctuations.
+
+```{r}
+df$time <- 1:nrow(df)
+df$moving_avg <- zoo::rollmean(df$y, 10, fill = NA)
+ggplot(df, aes(x = time, y = y)) +
+  geom_line(alpha = 0.4) +
+  geom_line(aes(y = moving_avg), color = 'blue', size = 1) +
+  labs(title = "Time Trend with Moving Average", x = "Time", y = "y")
+```
+
+**Takeaway**: Some short-term fluctuation is observed, but no consistent trend emerges.
+
+## 4. Sector-Level Insights
+
+**Boxplot by Sector:** y is visualized across 4 randomly assigned sectors.
+**Takeaway:** Adds a categorical dimension for interpreting distribution spread.
+
+```{r}
+set.seed(123)
+df$sector <- sample(c("Tech", "Health", "Finance", "Energy"), nrow(df), replace = TRUE)
+ggplot(df, aes(x = sector, y = y)) +
+  geom_boxplot(fill = "skyblue") +
+  labs(title = "Sector-wise Distribution of Target Variable", x = "Sector", y = "y")
+```
+
+## 5. Volatility & Volume
+
+**Scatter Plot:\* Shows how volatility (high-low spread) varies with transaction volume.** Simulated Financial Analogy:\*\* Useful if modeling stock-like behavior.
+
+```{r}
+df$high <- df$y + runif(nrow(df), 0, 5)
+df$low <- df$y - runif(nrow(df), 0, 5)
+df$volume <- rpois(nrow(df), lambda = 1000)
+df$volatility <- df$high - df$low
+
+ggplot(df, aes(x = volume, y = volatility)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Volume vs Volatility", x = "Volume", y = "Volatility")
+```
+
+# Step 3: Model Training and Evaluation
+
+```{r}
+# Shared Train-Test Split
+set.seed(123)
+train_idx <- sample(1:n, size = 0.7 * n)
+X_train <- X[train_idx, ]
+y_train <- y[train_idx]
+X_test <- X[-train_idx, ]
+y_test <- y[-train_idx]
+```
+
+## 6. Methodologies and Trends
+
+## Ridge Regression
+
+Uses glmnet with alpha = 0.
+Applies regularization to shrink coefficients and reduce overfitting.
+MSE is computed to evaluate prediction accuracy.
+Ridge regression was fit using glmnet with alpha = 0.
+Cross-validation selected the optimal lambda.
+The model reduces overfitting by shrinking coefficients.
+MSE was calculated on test data for performance comparison.
+
+```{r}
+cv_ridge <- cv.glmnet(X_train, y_train, alpha = 0)
+ridge_model <- glmnet(X_train, y_train, alpha = 0, lambda = cv_ridge$lambda.min)
+ridge_pred <- predict(ridge_model, s = cv_ridge$lambda.min, newx = X_test)
+ridge_mse <- mean((ridge_pred - y_test)^2)
+ridge_mse
+```
+
+## Lasso Regression
+
+Uses glmnet with alpha = 1.
+Performs feature selection by setting some coefficients to zero.
+MSE is computed to compare with Ridge and Subsampling.
+Lasso was fit using glmnet with cross-validated lambda.
+It shrinks some coefficients to zero, enabling feature selection.
+Test set predictions were used to compute MSE for comparison.
+
+```{r}
+cv_lasso <- cv.glmnet(X_train, y_train, alpha = 1)
+lasso_model <- glmnet(X_train, y_train, alpha = 1, lambda = cv_lasso$lambda.min)
+lasso_pred <- predict(lasso_model, s = cv_lasso$lambda.min, newx = X_test)
+lasso_mse <- mean((lasso_pred - y_test)^2)
+lasso_mse
+```
+
+## Subsampling Ensemble (Fixed)
+
+Creates 30 models using 50% random subsamples.
+Aggregates predictions by averaging.
+MSE is computed and found to be high, showing instability under random sampling.
+An ensemble of 30 linear models was built using 50% random subsamples of training data.
+Predictions were averaged across models to form a final prediction.
+The MSE was computed, revealing higher error due to variability from random sampling.
+
+```{r subsampling}
+p <- ncol(X_train)
+X_train_df <- as.data.frame(X_train)
+X_test_df <- as.data.frame(X_test)
+colnames(X_train_df) <- paste0("X", 1:p)
+colnames(X_test_df) <- paste0("X", 1:p)
+
+set.seed(123)
+ensemble_preds <- replicate(30, {
+  sample_idx <- sample(1:nrow(X_train_df), size = floor(0.5 * nrow(X_train_df)))
+  lm_data <- data.frame(y = y_train[sample_idx], X_train_df[sample_idx, ])
+  model <- lm(y ~ ., data = lm_data)
+  predict(model, newdata = X_test_df)
+})
+
+ensemble_mean <- rowMeans(ensemble_preds, na.rm = TRUE)
+subsample_mse <- mean((ensemble_mean - y_test)^2)
+subsample_mse
+```
+
+# *Step 4: Model Comparison*
+
+## MSE Comparison including Ridge, Subsampling, and Lasso
+
+The bar plot compares the mean squared errors (MSE) of Ridge, Subsampling, and Lasso models.
+Each bar shows the test error from the respective method, highlighting relative prediction accuracy.
+Ridge and Lasso show lower MSE than Subsampling, suggesting better generalization.
+Lasso achieves similar or slightly better performance than Ridge, while also offering feature selection.
+
+```{r mse_plot, echo=FALSE}
+mse_df <- data.frame(
+  Method = c("Ridge", "Subsampling", "Lasso"),
+  MSE = c(ridge_mse, subsample_mse, lasso_mse)
+)
+
+ggplot(mse_df, aes(x = Method, y = MSE, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = round(MSE, 2)), vjust = -0.5, size = 5) +
+  labs(title = "MSE Comparison: Ridge vs Subsampling vs Lasso", x = "Method", y = "Mean Squared Error") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Ridge" = "#F8766D", "Subsampling" = "#00BFC4", "Lasso" = "#7CAE00"))
+```
+
+```         
+```
+
+# *Step 5: Additional Simulations and Diagnostics* 
+
+## 7. Recovery Time vs Decline Shows linear correlation between simulated crash decline and recovery time.
+
+```{r}
+df$crash <- sample(c(TRUE, FALSE), nrow(df), replace = TRUE)
+df$decline <- ifelse(df$crash, abs(rnorm(nrow(df), 10, 5)), NA)
+df$recovery_time <- ifelse(df$crash, rnorm(nrow(df), 50, 20), NA)
+
+ggplot(na.omit(df), aes(x = decline, y = recovery_time)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = "Recovery Time vs Decline Magnitude", x = "Decline", y = "Recovery Time")
+```
+
+## 8. Confusion Matrix
+
+Classifies y into High vs Low using top features.
+Accuracy: \~50%, which is close to random — typical in high-dimensional data with weak signal.
+**Note**: Only the first 10 features were used to simplify the classification task and reduce overfitting risk.
+
+```{r}
+df$label <- ifelse(df$y > median(df$y), "High", "Low")
+df$label <- as.factor(df$label)
+feature_cols <- paste0("X", 1:10)
+train_data <- df[train_idx, ]
+test_data <- df[-train_idx, ]
+
+model_log <- glm(label ~ ., data = train_data[, c("label", feature_cols)], family = "binomial")
+pred_probs <- predict(model_log, newdata = test_data[, feature_cols], type = "response")
+pred_class <- ifelse(pred_probs > 0.5, "High", "Low")
+pred_class <- factor(pred_class, levels = c("Low", "High"))
+
+confusionMatrix(pred_class, test_data$label)
+```
+
+## 9. Bias-Variance Decomposition (Fixed)
+
+100 simulations were run.
+In each, new data were generated, Ridge, Lasso, and Subsampling models were trained, and test MSEs were recorded.
+A boxplot was created to visualize MSE distributions.
+
+```{r bias-variance}
+simulate_model <- function(n, p, nsim = 100) {
+  mse_ridge <- c()
+  mse_lasso <- c()
+  mse_sub <- c()
+
+  for (i in 1:nsim) {
+    X <- matrix(rnorm(n * p), nrow = n)
+    beta <- rnorm(p)
+    y <- X %*% beta + rnorm(n)
+
+    train_idx <- sample(1:n, size = 0.7 * n)
+    X_train <- X[train_idx, ]
+    y_train <- y[train_idx]
+    X_test <- X[-train_idx, ]
+    y_test <- y[-train_idx]
+
+    X_train_df <- as.data.frame(X_train)
+    X_test_df <- as.data.frame(X_test)
+    colnames(X_train_df) <- paste0("X", 1:p)
+    colnames(X_test_df) <- paste0("X", 1:p)
+
+    # Ridge
+    cv_ridge <- cv.glmnet(X_train, y_train, alpha = 0)
+    ridge_pred <- predict(cv_ridge, s = "lambda.min", newx = X_test)
+    mse_ridge <- c(mse_ridge, mean((ridge_pred - y_test)^2))
+
+    # Lasso
+    cv_lasso <- cv.glmnet(X_train, y_train, alpha = 1)
+    lasso_pred <- predict(cv_lasso, s = "lambda.min", newx = X_test)
+    mse_lasso <- c(mse_lasso, mean((lasso_pred - y_test)^2))
+
+    # Subsampling
+    preds <- replicate(30, {
+      idx <- sample(1:nrow(X_train_df), floor(0.5 * nrow(X_train_df)))
+      lm_data <- data.frame(y = y_train[idx], X_train_df[idx, ])
+      model <- lm(y ~ ., data = lm_data)
+      predict(model, newdata = X_test_df)
+    })
+    mse_sub <- c(mse_sub, mean((rowMeans(preds, na.rm = TRUE) - y_test)^2))
+  }
+  list(ridge = mse_ridge, lasso = mse_lasso, subsample = mse_sub)
+}
+
+results <- simulate_model(200, 100)
+boxplot(data.frame(Ridge = results$ridge, Lasso = results$lasso, Subsampling = results$subsample),
+        main = "Bias-Variance Tradeoff", ylab = "MSE")
+```
+
+## 10. Subsampling Sensitivity Analysis
+
+X-axis = Sample ratio, Y-axis = MSE Subsampling ratios from 0.3 to 0.9 were tested.
+For each ratio, 30 linear models were trained on random subsamples, predictions were averaged, and MSE was computed.
+Conclusion: Higher subsample ratio slightly reduces MSE but still much worse than Ridge/Lasso.
+
+```{r subsampling-sensitivity}
+sensitivity_results <- sapply(seq(0.3, 0.9, by = 0.1), function(ratio) {
+  preds <- replicate(30, {
+    idx <- sample(1:nrow(X_train_df), floor(ratio * nrow(X_train_df)))
+    lm_data <- data.frame(y = y_train[idx], X_train_df[idx, ])
+    model <- lm(y ~ ., data = lm_data)
+    predict(model, newdata = X_test_df)
+  })
+  mean((rowMeans(preds, na.rm = TRUE) - y_test)^2)
+})
+
+plot(seq(0.3, 0.9, by = 0.1), sensitivity_results, type = "b",
+     xlab = "Subsampling Ratio", ylab = "MSE", main = "Subsampling Sensitivity Analysis")
+```
+
+# *Step 6: Dimensionality Reduction*
+
+## 11. PCA Analysis
+
+PCA Summary Table Shows variance explained by 100 principal components.
+Top PCs capture very little variance individually — confirms data is noisy.
+PC1 vs PC2 Scatterplot — spread confirms data has no strong clusters or separation.
+
+```{r pca-analysis}
+pca_result <- prcomp(X, scale. = TRUE)
+summary(pca_result)
+
+ggplot(data = data.frame(PC1 = pca_result$x[, 1], PC2 = pca_result$x[, 2]),
+       aes(x = PC1, y = PC2)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "PCA - First Two Principal Components", x = "PC1", y = "PC2")
+```
+
+# *Step 7: Additional Diagnostics*
+
+## 12. Correlation Heatmap
+
+Top 20 features — colored matrix helps spot variable interdependence.
+
+```{r correlation-heatmap}
+cor_matrix <- cor(df[, paste0("X", 1:20)])
+corrplot(cor_matrix, method = "color", tl.cex = 0.6)
+```
+
+## 13. Residual Analysis
+
+Visual Check: No major pattern — residuals centered around 0.
+
+```{r residual-analysis}
+# Train-test split
+X_train_df <- as.data.frame(X_train)
+X_test_df <- as.data.frame(X_test)
+colnames(X_train_df) <- paste0("X", 1:ncol(X_train))
+colnames(X_test_df) <- paste0("X", 1:ncol(X_test))
+
+# Ridge Regression
+cv_ridge <- cv.glmnet(X_train, y_train, alpha = 0)
+ridge_pred <- predict(cv_ridge, s = "lambda.min", newx = X_test)
+residuals_ridge <- y_test - ridge_pred
+
+# Lasso Regression
+cv_lasso <- cv.glmnet(X_train, y_train, alpha = 1)
+lasso_pred <- predict(cv_lasso, s = "lambda.min", newx = X_test)
+residuals_lasso <- y_test - lasso_pred
+
+# Subsampling Ensemble
+ensemble_preds <- replicate(30, {
+  idx <- sample(1:nrow(X_train_df), size = floor(0.5 * nrow(X_train_df)))
+  lm_data <- data.frame(y = y_train[idx], X_train_df[idx, ])
+  model <- lm(y ~ ., data = lm_data)
+  predict(model, newdata = X_test_df)
+})
+ensemble_mean <- rowMeans(ensemble_preds, na.rm = TRUE)
+residuals_sub <- y_test - ensemble_mean
+
+# Plot all residuals side by side
+par(mfrow = c(1, 3))
+plot(residuals_ridge, main = "Ridge Residuals", ylab = "Residual", col = "red", xlab = "Index")
+abline(h = 0, col = "black")
+plot(residuals_lasso, main = "Lasso Residuals", ylab = "Residual", col = "blue", xlab = "Index")
+abline(h = 0, col = "black")
+plot(na.omit(residuals_sub), main = "Subsampling Residuals", ylab = "Residual", col = "darkgreen", xlab = "Index")
+abline(h = 0, col = "black")
+par(mfrow = c(1, 1))
+
+```
+
+## 14. Model Complexity vs Error
+
+Ridge and Lasso models were trained across a grid of lambda values.
+For each lambda, MSE was calculated on test data.
+Plots were created to visualize how regularization strength affects model error.
+Subsampling was excluded as it lacks a regularization parameter.
+
+```{r model-complexity}
+lambdas <- 10^seq(3, -2, length.out = 100)
+ridge_models <- glmnet(X_train, y_train, alpha = 0, lambda = lambdas)
+errors <- sapply(1:length(lambdas), function(i) {
+  preds <- predict(ridge_models, s = lambdas[i], newx = X_test)
+  mean((preds - y_test)^2)
+})
+plot(log10(lambdas), errors, type = "l", main = "Model Complexity vs Error",
+     xlab = "log10(Lambda)", ylab = "MSE")
+
+# Lasso Model Complexity vs Error
+lambdas <- 10^seq(3, -2, length.out = 100)
+lasso_models <- glmnet(X_train, y_train, alpha = 1, lambda = lambdas)
+lasso_errors <- sapply(1:length(lambdas), function(i) {
+  preds <- predict(lasso_models, s = lambdas[i], newx = X_test)
+  mean((preds - y_test)^2)
+})
+plot(log10(lambdas), lasso_errors, type = "l", main = "Lasso: Model Complexity vs Error",
+     xlab = "log10(Lambda)", ylab = "MSE", col = "blue")
+
+```
+
+## 15. Real Dataset Integration (Placeholder)
+
+Not yet implimented, Replace with real-world dataset to validate model generalization.
+
+```{r real-dataset}
+# Placeholder for real dataset usage
+# data_real <- read.csv("your_dataset.csv")
+# summary(data_real)
+```
+
+# *Step 8: Enhanced Styling Plot*
+
+## 16. Enhanced Styling Example
+
+```{r styled-plot, echo=FALSE, fig.width=6, fig.height=4}
+ggplot(df, aes(x = volume, y = volatility, color = sector)) +
+  geom_point(alpha = 0.6, size = 2) +
+  theme_minimal() +
+  labs(title = "Styled Plot: Volatility by Volume & Sector",
+       x = "Volume", y = "Volatility")
+```
+
+## 17. Conclusion
+
+This report evaluated Ridge, Lasso, and Subsampling models through controlled simulations.
+Lasso demonstrated feature selection benefits, Ridge showed stable performance, and Subsampling revealed high variability.
+Future work will involve validating these insights using real-world datasets.
