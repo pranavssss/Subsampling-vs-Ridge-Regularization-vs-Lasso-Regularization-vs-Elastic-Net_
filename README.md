@@ -43,7 +43,8 @@ The goal is to understand how shrinkage methods compare to naive subsampling in 
 pranavssss/
 │
 ├── Final Project Files/
-│   ├── Project first draft.Rmd
+│   ├── MSDS Final Project Report_Pranav S.pdf
+|   |── Project first draft.Rmd
 │   ├── First Draft Final Project Report.pdf
 │
 ├── Data Mining 2025 Old Project Submission Files/
